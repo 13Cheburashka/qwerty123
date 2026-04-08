@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cyberpunk 2020 — Matrix Calculator</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+
+<script>
+window.USE_FIREBASE = true;
+window.FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyBjgMtXFqH4o8_WO-SLJRCs25w-On5awYc",
+  authDomain:        "netrunning-58ad3.firebaseapp.com",
+  databaseURL:       "https://netrunning-58ad3-default-rtdb.europe-west1.firebasedatabase.app/",
+  projectId:         "netrunning-58ad3",
+  storageBucket:     "netrunning-58ad3.firebasestorage.app",
+  messagingSenderId: "1021953072176",
+  appId:             "1:1021953072176:web:1ad093b2e44edefc1261f5",
+  measurementId:     "G-RQR5LLQH9S"
+};
+</script>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-database-compat.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#060c14}
+#root{position:fixed;inset:0;overflow:hidden}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:#060c14}
+::-webkit-scrollbar-thumb{background:#1e2e42}
+::-webkit-scrollbar-thumb:hover{background:#2a3f5a}
+select option{background:#0d1825;color:#ede8cc}
+input,textarea,select{font-family:'Share Tech Mono',monospace}
+input[type=checkbox]{accent-color:#ee4455;cursor:pointer;width:15px;height:15px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const {useState,useEffect,useRef} = React;
+// ═══════════════════════════════════════════════════════
+//   CYBERPUNK 2020 · MATRIX CALCULATOR
+//   Production build · Firebase Realtime DB Sync
+// ═══════════════════════════════════════════════════════
+
+const C={
+  bg:'#060c14',pan:'#0d1825',pan2:'#111f30',pan3:'#162840',
+  brd:'#1e2e42',brdl:'#2a3f5a',
+  aml:'#f0b030',amll:'#ffd060',
+  rdl:'#ee4455',rdll:'#ff7788',
+  cyl:'#00b8d9',cyll:'#33ddff',
+  gnl:'#00cc80',gnll:'#44ffaa',
+  org:'#ff8833',prp:'#cc55ff',
+  tx:'#cec4a0',txb:'#ede8cc',txd:'#556070',txdd:'#2e3e4e',
+  fn:"'Share Tech Mono',monospace",
+  or:"'Orbitron',sans-serif"
+};
+const CATC={atk:C.rdl,def:C.cyl,util:C.aml};
+const CATL={atk:'АТАКУЮЩАЯ',def:'ЗАЩИТНАЯ',util:'ВСПОМОГАТЕЛЬНАЯ'};
+const PCOLORS=['#f0b030','#ee4455','#00b8d9','#00cc80','#cc55ff','#ff8833','#4499ff','#ff55cc','#ffdd44','#44ffee'];
+const GM_PASS='NETRUNNER2020';
+const SCYCLE=['active','disabled','destroyed'];
+const SCOL={active:C.gnl,disabled:C.txd,destroyed:C.rdl};
+const SLBL={active:'● АКТИВНА',disabled:'○ ОТКЛЮЧЕНА',destroyed:'✕ УНИЧТОЖЕНА'};
+const MAX_LOG=100;
+
+const BUGS=[
+  {id:1,label:'Замедление',    desc:'-3 к Скорости деки',               numeric:true, mult:-3},
+  {id:2,label:'Помехи',        desc:'-1 к шансу попадания',             numeric:true, mult:-1},
+  {id:3,label:'Сбой урона',    desc:'-1 к урону (мин. 1)',              numeric:true, mult:-1},
+  {id:4,label:'Помехи льда',   desc:'Штраф -2 на пробитие Мягкого Льда',numeric:false},
+  {id:5,label:'Уязвимость',    desc:'+1 к получаемому урону',           numeric:false},
+  {id:6,label:'Нестабильность',desc:'Порог Провала +1',                 numeric:true, mult:1},
+  {id:7,label:'Маяк',          desc:'Сложность трейсинга -1',           numeric:false},
+  {id:8,label:'Помехи защиты', desc:'DV персонажа -1',                  numeric:true, mult:-1},
+  {id:9,label:'Таймер',        desc:'1 урон, через d6 ходов — снова',   numeric:false},
+  {id:10,label:'Цепная реакция',desc:'Урон = кол-во активных Багов',    numeric:false},
+];
+const defBugs=()=>Object.fromEntries(BUGS.map(b=>[b.id,0]));
+
+// ── Firebase DB layer ──────────────────────────────────
+let FDB=null;
+try{
+  if(window.USE_FIREBASE&&typeof firebase!=='undefined'){
+    firebase.initializeApp(window.FIREBASE_CONFIG);
+    FDB=firebase.database();
+  }
+}catch(e){console.warn('Firebase:',e);}
+
+const LS_SET=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}};
+const LS_GET=(k)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):null;}catch{return null;}};
+const path2key=p=>p.replace(/\//g,'__');
+
+const DB={
+  get:async p=>{
+    if(FDB){const s=await FDB.ref(p).once('value');return s.val();}
+    return LS_GET(path2key(p));
+  },
+  set:async(p,v)=>{
+    if(FDB)return FDB.ref(p).set(v);
+    LS_SET(path2key(p),v);
+  },
+  sub:(p,cb)=>{
+    if(FDB){
+      const ref=FDB.ref(p);
+      ref.on('value',s=>cb(s.val()));
+      return()=>ref.off();
+    }
+    // Polling fallback for localStorage
+    cb(LS_GET(path2key(p)));
+    const t=setInterval(()=>cb(LS_GET(path2key(p))),2500);
+    return()=>clearInterval(t);
+  }
+};
+
+// ── Dice ───────────────────────────────────────────────
+function roll(expr){
+  const s=String(expr??'').trim();
+  if(!s||s==='—')return{val:0,str:'0'};
+  const n=+s;if(!isNaN(n))return{val:n,str:s};
+  if(!/^[\d\s+\-*/d().]+$/i.test(s))return{val:0,str:'ERR'};
+  let d=s;
+  const ev=s.replace(/(\d+)d(\d+)/gi,(m,a,b)=>{
+    const rs=Array.from({length:Math.min(+a,20)},()=>Math.floor(Math.random()*Math.min(+b,9999))+1);
+    d=d.replace(m,'['+rs.join('+')+']');return rs.reduce((x,y)=>x+y,0);
+  });
+  try{const v=Function('"use strict";return('+ev+')')();return{val:Math.round(v*100)/100,str:d};}
+  catch{return{val:0,str:'ERR'};}
+}
+const pn=v=>{const n=parseFloat(v);return isNaN(n)?0:n;};
+const uid=()=>Math.random().toString(36).slice(2,8).toUpperCase();
+const ts=()=>new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+
+// ── Computed stats ─────────────────────────────────────
+const actP=progs=>(progs||[]).filter(p=>p.status==='active');
+const duAct=progs=>actP(progs).filter(p=>p.category==='def'||p.category==='util');
+// Global crit/fumble: ONLY def/util programs affect deck-wide thresholds
+const globalCrit=progs=>Math.max(0,Math.min(10,10+duAct(progs).reduce((s,p)=>s+(+p.crit_mod||0),0)));
+const globalFumble=(progs,bugs)=>Math.max(0,Math.min(10,1+duAct(progs).reduce((s,p)=>s+(+p.fumble_mod||0),0)+(bugs?.[6]||0)));
+// Per-atk-program thresholds = global + that program's own crit_mod/fumble_mod
+const atkCrit=(prog,progs)=>Math.max(0,Math.min(10,globalCrit(progs)+(+prog.crit_mod||0)));
+const atkFumble=(prog,progs,bugs)=>Math.max(0,Math.min(10,globalFumble(progs,bugs)+(+prog.fumble_mod||0)));
+const calcDV=(progs,bugs)=>duAct(progs).reduce((s,p)=>s+pn(p.dv),0)-(bugs?.[8]||0);
+const calcSpeed=(stats,progs,bugs)=>pn(stats?.int)+duAct(progs).reduce((s,p)=>s+pn(p.spd_bonus),0)-(bugs?.[1]||0)*3;
+const bugHitPen=bugs=>(bugs?.[2]||0);
+const bugDmgPen=bugs=>(bugs?.[3]||0);
+
+// ── Style helpers ──────────────────────────────────────
+const SI=(ex={})=>({background:C.pan3,border:'1px solid '+C.brdl,color:C.txb,fontSize:'14px',padding:'7px 10px',outline:'none',width:'100%',fontFamily:C.fn,...ex});
+const SB=(bc,tc,ex={})=>({background:'transparent',border:'1px solid '+(bc||C.brdl),color:tc||C.tx,fontFamily:C.fn,fontSize:'12px',padding:'6px 14px',cursor:'pointer',letterSpacing:'1px',...ex});
+const Lbl=({t})=><div style={{fontSize:10,color:C.txd,letterSpacing:2,marginBottom:7,textTransform:'uppercase'}}>{t}</div>;
+const FL=({label,children})=><div><Lbl t={label}/>{children}</div>;
+
+// ══════════════════════════════════════════════════════
+//   APP
+// ══════════════════════════════════════════════════════
+function App(){
+  const [phase,setPhase]=useState('boot');
+  const [myId,setMyId]=useState(null);
+  const [myP,setMyP]=useState(null);
+  const [roster,setRoster]=useState([]);
+  const [viewId,setViewId]=useState(null);
+  const [logs,setLogs]=useState([]);
+  const [modal,setModal]=useState(null);
+  const logRef=useRef(null);
+  const unsubs=useRef([]);
+
+  useEffect(()=>{
+    (async()=>{
+      // Try to restore last session by stored profile ID
+      const id=LS_GET('cp20_myid');
+      if(id){
+        const p=await DB.get('cp20/profiles/'+id);
+        if(p){boot(id,p);return;}
+      }
+      // No valid session — show login
+      setPhase('login');
+    })();
+    return()=>unsubs.current.forEach(f=>f?.());
+  },[]);
+
+  // scroll is handled inside LogPanel with smart bottom-detection
+
+  const boot=(id,p)=>{
+    setMyId(id);setMyP(p);setViewId(id);setPhase('main');
+    unsubs.current.push(
+      DB.sub('cp20/roster',val=>{
+        if(!val)return;
+        const ids=Array.isArray(val)?val.filter(Boolean):[...new Set(Object.values(val))];
+        Promise.all(ids.map(i=>DB.get('cp20/profiles/'+i))).then(prs=>{
+          const v=prs.filter(Boolean);
+          setRoster(v);
+          const m=v.find(x=>x.id===id);
+          if(m)setMyP(m);
+        });
+      }),
+      DB.sub('cp20/logs',val=>{
+        if(!val)return;
+        const arr=(Array.isArray(val)?val:Object.values(val)).filter(Boolean);
+        setLogs(arr.slice(-MAX_LOG));
+      })
+    );
+  };
+
+  const saveP=async p=>{
+    await DB.set('cp20/profiles/'+p.id,p);
+    // Roster = array of unique IDs
+    const cur=await DB.get('cp20/roster')||[];
+    const ids=Array.isArray(cur)?cur:Object.values(cur);
+    if(!ids.includes(p.id))await DB.set('cp20/roster',[...ids,p.id]);
+    if(p.id===myId)setMyP(p);
+    setRoster(r=>{const i=r.findIndex(x=>x.id===p.id);if(i>=0){const n=[...r];n[i]=p;return n;}return[...r,p];});
+  };
+
+  const addLog=async(action,pr,detail,type='info')=>{
+    const p=pr||myP;if(!p)return;
+    const prev=await DB.get('cp20/logs')||[];
+    const arr=(Array.isArray(prev)?prev:Object.values(prev)).filter(Boolean);
+    const e={id:uid(),from:p.handle,color:p.color,action,detail:detail||'',type,t:ts()};
+    const next=[...arr,e].slice(-MAX_LOG);
+    await DB.set('cp20/logs',next);
+    setLogs(next);
+  };
+
+  const onLogin=async({handle,color,isGM})=>{
+    // Determine account key: GM has one shared key, players are keyed by color hex
+    const accountKey=isGM?'__GM__':color.replace('#','').toLowerCase();
+
+    // Look up existing profile for this account key
+    const existingId=await DB.get('cp20/colormap/'+accountKey);
+    let p=existingId?await DB.get('cp20/profiles/'+existingId):null;
+
+    if(p){
+      // Account exists — update handle (new person may log in with same color/GM)
+      // but keep ALL other data (deck, programs, bugs, stats) intact
+      if(p.handle!==handle){
+        p={...p,handle};
+        await DB.set('cp20/profiles/'+p.id,p);
+      }
+      LS_SET('cp20_myid',p.id);
+      await addLog(`ПОДКЛЮЧИЛСЯ (${isGM?'GM':color})`,p,'','system');
+      boot(p.id,p);
+    } else {
+      // New account for this color / GM — create fresh profile
+      const id=isGM?'GM_ACCOUNT':uid();
+      p={id,handle,color:isGM?'#ee4455':color,isGM,
+        stats:{int:'',iface:''},
+        cyberdeck:{name:'',memory:'',speed_raw:'',defense:''},
+        programs:[],bugs:defBugs()};
+      // Save colormap entry so future logins with same color restore this profile
+      await DB.set('cp20/colormap/'+accountKey,id);
+      LS_SET('cp20_myid',id);
+      await saveP(p);
+      await addLog('СОЗДАЛ АККАУНТ И ПОДКЛЮЧИЛСЯ',p,'','system');
+      boot(id,p);
+    }
+  };
+
+  const onLogout=async()=>{
+    if(myP)await addLog('ОТКЛЮЧИЛСЯ',myP,'','system');
+    LS_SET('cp20_myid',null);
+    unsubs.current.forEach(f=>f?.());
+    setPhase('login');setMyId(null);setMyP(null);setRoster([]);setViewId(null);setLogs([]);
+  };
+
+  const onStat=async(f,v)=>{
+    if(!myP)return;
+    await saveP({...myP,stats:{...myP.stats,[f]:v}});
+    await addLog(`Изменил ${f==='int'?'Интеллект':'Интерфейс'}: ${v||'—'}`);
+  };
+  const onDeck=async(f,v)=>{
+    if(!myP)return;
+    await saveP({...myP,cyberdeck:{...myP.cyberdeck,[f]:v}});
+    const L={name:'модель',memory:'память',speed_raw:'скорость',defense:'защита'};
+    await addLog(`Кибердека [${L[f]||f}]: ${v||'—'}`);
+  };
+  const onSaveProg=async prog=>{
+    if(!myP)return;
+    const isNew=!prog.id;
+    const p=isNew?{...prog,id:uid(),status:'active'}:prog;
+    const progs=isNew?[...(myP.programs||[]),p]:(myP.programs||[]).map(x=>x.id===p.id?p:x);
+    await saveP({...myP,programs:progs});
+    await addLog(isNew?`Установил «${p.name}» [${CATL[p.category]}]`:`Обновил «${p.name}»`);
+    setModal(null);
+  };
+  const onDelProg=async(id,name)=>{
+    if(!myP)return;
+    await saveP({...myP,programs:(myP.programs||[]).filter(p=>p.id!==id)});
+    await addLog(`Удалил «${name}»`);
+  };
+  const onCycle=async progId=>{
+    if(!myP)return;
+    const progs=(myP.programs||[]).map(p=>{if(p.id!==progId)return p;const i=SCYCLE.indexOf(p.status||'active');return{...p,status:SCYCLE[(i+1)%3]};});
+    const prog=progs.find(p=>p.id===progId);
+    await saveP({...myP,programs:progs});
+    await addLog(`«${prog?.name}» → ${SLBL[prog?.status]||prog?.status}`);
+  };
+  const onBug=async(bugId,val)=>{
+    if(!myP)return;
+    await saveP({...myP,bugs:{...(myP.bugs||defBugs()),[bugId]:Math.max(0,val)}});
+  };
+
+  const addRandBug=async profile=>{
+    const id=Math.floor(Math.random()*10)+1;
+    const bugs={...(profile.bugs||defBugs())};
+    bugs[id]=(bugs[id]||0)+1;
+    const up={...profile,bugs};
+    await DB.set('cp20/profiles/'+up.id,up);
+    if(up.id===myId)setMyP(up);
+    await addLog(`⚠ ПРОВАЛ! Баг #${id} «${BUGS.find(b=>b.id===id)?.label}» +1 (стаков: ${bugs[id]})`,profile,'','fumble');
+    return up;
+  };
+
+  // Кнопка 1 — «ГЛЮК»: применяет случайный баг к персонажу (как при провале)
+  const onGlitch=async()=>{
+    if(!myP)return;
+    await addRandBug(myP);
+  };
+
+  // Кнопка 2 — «СКАНИРОВАТЬ»: показывает случайный баг в логе, не применяет
+  const onScan=async()=>{
+    if(!myP)return;
+    const id=Math.floor(Math.random()*10)+1;
+    const bug=BUGS.find(b=>b.id===id);
+    await addLog(`🔍 МАТРИЦА СКАНИРУЕТ: Баг #${id} «${bug?.label}» — ${bug?.desc}`,myP,'','system');
+  };
+
+  const onRollAtk=async(prog,manBonus)=>{
+    if(!myP)return null;
+    const progs=myP.programs||[];
+    const bugs=myP.bugs||defBugs();
+    const critT=atkCrit(prog,progs);
+    const fumT=atkFumble(prog,progs,bugs);
+
+    const d10=roll('1d10');
+    const iface=roll(myP.stats?.iface||'0');
+    const hitMods=duAct(progs).filter(p=>p.hit_bonus&&String(p.hit_bonus).trim());
+    const hitR=hitMods.map(p=>({name:p.name,r:roll(p.hit_bonus)}));
+    const hp=bugHitPen(bugs);
+    const man=roll(manBonus||'0');
+    let ht=d10.val+iface.val+hitR.reduce((s,m)=>s+m.r.val,0)-hp+man.val;
+    ht=Math.round(ht*100)/100;
+    const isCrit=d10.val>=critT, isFum=d10.val<=fumT;
+
+    const dp=bugDmgPen(bugs);
+    const dRmods=duAct(progs).filter(p=>p.dmg_bonus_runners&&String(p.dmg_bonus_runners).trim());
+    const dPmods=duAct(progs).filter(p=>p.dmg_bonus_programs&&String(p.dmg_bonus_programs).trim());
+    let dmgR=null,dmgP=null;
+    if(prog.dmg_runners){
+      const b=roll(prog.dmg_runners);
+      const br=dRmods.map(p=>({name:p.name,r:roll(p.dmg_bonus_runners)}));
+      const tot=Math.max(1,Math.round((b.val+br.reduce((s,m)=>s+m.r.val,0)-dp)*100)/100);
+      dmgR={total:tot,parts:[b.str,...br.map(m=>'+'+m.name+'['+m.r.str+']'),dp?'-Bug#3['+dp+']':''].filter(Boolean)};
+    }
+    if(prog.dmg_programs){
+      const b=roll(prog.dmg_programs);
+      const br=dPmods.map(p=>({name:p.name,r:roll(p.dmg_bonus_programs)}));
+      const tot=Math.max(1,Math.round((b.val+br.reduce((s,m)=>s+m.r.val,0)-dp)*100)/100);
+      dmgP={total:tot,parts:[b.str,...br.map(m=>'+'+m.name+'['+m.r.str+']'),dp?'-Bug#3['+dp+']':''].filter(Boolean)};
+    }
+
+    const hitExpr=`1d10=[${d10.val}] + IFACE[${iface.str}]`
+      +hitR.map(m=>` + ${m.name}[${m.r.str}]`).join('')
+      +(hp?` − Bug#2[${hp}]`:'')
+      +(man.val?` + Бонус[${man.str}]`:'');
+
+    const payload={hitTotal:ht,hitExpr,isCrit,isFum,d10:d10.val,critT,fumT,
+      dmgR:dmgR?{total:dmgR.total,parts:dmgR.parts}:null,
+      dmgP:dmgP?{total:dmgP.total,parts:dmgP.parts}:null,
+      description:prog.description||''};
+    const type=isCrit?'crit':isFum?'fumble':'roll';
+    await addLog(`⚔ АТАКА «${prog.name}»`,myP,JSON.stringify(payload),type);
+    let up=myP;if(isFum)up=await addRandBug(myP);
+    return{...payload,updatedProfile:up};
+  };
+
+  const onRollInit=async manBonus=>{
+    if(!myP)return null;
+    const progs=myP.programs||[];
+    const bugs=myP.bugs||defBugs();
+    const d10=roll('1d10');
+    const int=roll(myP.stats?.int||'0');
+    const spdM=duAct(progs).filter(p=>p.spd_bonus&&String(p.spd_bonus).trim());
+    const spdR=spdM.map(p=>({name:p.name,r:roll(p.spd_bonus)}));
+    const bs=(bugs[1]||0)*3;
+    const man=roll(manBonus||'0');
+    let tot=d10.val+int.val+spdR.reduce((s,m)=>s+m.r.val,0)-bs+man.val;
+    tot=Math.round(tot*100)/100;
+    const expr=`1d10=[${d10.val}] + INT[${int.str}]`
+      +spdR.map(m=>` + ${m.name}[${m.r.str}]`).join('')
+      +(bs?` − Bug#1[${bs}]`:'')
+      +(man.val?` + Бонус[${man.str}]`:'');
+    await addLog(`🎲 ИНИЦИАТИВА`,myP,JSON.stringify({total:tot,expr}),'roll');
+    return{total:tot,expr};
+  };
+
+  const vP=(()=>{if(myP?.isGM&&viewId&&viewId!==myId)return roster.find(p=>p.id===viewId)||myP;return myP;})();
+  const isOwn=vP?.id===myId;
+
+  if(phase==='boot')return<div style={{position:'fixed',inset:0,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg,fontFamily:C.fn,color:C.aml,fontSize:14,letterSpacing:4}}>ИНИЦИАЛИЗАЦИЯ...</div>;
+  if(phase==='login')return<Login onLogin={onLogin}/>;
+
+  return<div style={{position:'fixed',inset:0,display:'flex',flexDirection:'column',background:C.bg,fontFamily:C.fn,color:C.tx}}>
+    <TopBar myP={myP} onLogout={onLogout} onInit={()=>setModal({t:'init'})} onGlitch={onGlitch} onScan={onScan}/>
+    <div style={{flex:1,display:'flex',overflow:'hidden',minHeight:0}}>
+      {myP?.isGM&&<Roster roster={roster} myId={myId} viewId={viewId} onSel={setViewId}/>}
+      {vP?<Sheet profile={vP} isOwn={isOwn}
+          onStat={onStat} onDeck={onDeck}
+          onAdd={()=>setModal({t:'prog',d:null})}
+          onEdit={p=>setModal({t:'prog',d:p})}
+          onDel={onDelProg} onCycle={onCycle}
+          onAtk={isOwn?p=>setModal({t:'atk',prog:p}):null}
+          onBug={isOwn?onBug:null}/>
+        :<div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,color:C.txd}}>Выберите нетраннера</div>}
+    </div>
+    <LogPanel logs={logs} logRef={logRef}/>
+    {modal?.t==='prog'&&<Ov onClose={()=>setModal(null)}><ProgModal ini={modal.d} onSave={onSaveProg} onClose={()=>setModal(null)}/></Ov>}
+    {modal?.t==='atk'&&<Ov onClose={()=>setModal(null)}><AtkModal prog={modal.prog} myP={myP} onRoll={onRollAtk} onClose={()=>setModal(null)}/></Ov>}
+    {modal?.t==='init'&&<Ov onClose={()=>setModal(null)}><InitModal myP={myP} onRoll={onRollInit} onClose={()=>setModal(null)}/></Ov>}
+  </div>;
+}
+
+function Ov({children,onClose}){return<div onClick={e=>{if(e.target===e.currentTarget)onClose();}} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.9)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:16,overflowY:'auto'}}>{children}</div>;}
+
+// ── Login ──────────────────────────────────────────────
+function Login({onLogin}){
+  const [h,setH]=useState('');const [col,setCol]=useState(PCOLORS[0]);
+  const [gm,setGm]=useState(false);const [pw,setPw]=useState('');const [err,setErr]=useState('');
+  const sub=()=>{if(!h.trim()){setErr('Введите позывной');return;}if(gm&&pw!==GM_PASS){setErr('Неверный пароль GM');return;}onLogin({handle:h.trim(),color:col,isGM:gm});};
+  const fbOk=window.USE_FIREBASE;
+  return<div style={{position:'fixed',inset:0,display:'flex',alignItems:'center',justifyContent:'center',background:C.bg,fontFamily:C.fn}}>
+    <div style={{width:440}}>
+      <div style={{textAlign:'center',marginBottom:14}}>
+        <div style={{fontFamily:C.or,fontSize:36,color:C.aml,letterSpacing:7,fontWeight:700,textShadow:'0 0 28px '+C.aml+'66'}}>CYBERPUNK</div>
+        <div style={{fontFamily:C.or,fontSize:17,color:C.rdl,letterSpacing:10,marginTop:4,textShadow:'0 0 18px '+C.rdl+'55'}}>2020</div>
+        <div style={{fontSize:11,color:C.txd,letterSpacing:4,marginTop:12}}>MATRIX CALCULATOR // NETRUNNER EDITION</div>
+        <div style={{fontSize:10,marginTop:7,letterSpacing:2,color:fbOk?C.gnl:C.aml}}>{fbOk?'⚡ Firebase Sync — мультиплеер активен':'💾 LocalStorage — заполни Firebase конфиг для мультиплеера'}</div>
+      </div>
+      <div style={{background:C.pan,border:'1px solid '+C.brd,padding:30}}>
+        <div style={{fontSize:10,color:C.aml,letterSpacing:3,marginBottom:22}}>// АВТОРИЗАЦИЯ</div>
+        <Lbl t="Позывной (Handle)"/>
+        <input value={h} onChange={e=>setH(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sub()} placeholder="V, Johnny, Rogue..." maxLength={22} style={{...SI({fontSize:16}),marginBottom:22}}/>
+        <Lbl t="Идентификационный цвет (= учётная запись)"/>
+        <div style={{display:'flex',gap:11,marginBottom:10,flexWrap:'wrap'}}>
+          {PCOLORS.map(c=><div key={c} onClick={()=>setCol(c)} style={{width:30,height:30,background:c,cursor:'pointer',flexShrink:0,outline:col===c?'2px solid '+C.txb:'2px solid transparent',outlineOffset:3,boxShadow:col===c?'0 0 12px '+c+'99':'none'}}/>)}
+        </div>
+        <div style={{fontSize:10,color:C.txd,marginBottom:20,letterSpacing:1}}>⚠ Один цвет = одна учётная запись. Выбери тот же цвет — войдёшь в свой профиль.</div>
+        <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',userSelect:'none',marginBottom:gm?16:24}}>
+          <input type="checkbox" checked={gm} onChange={e=>setGm(e.target.checked)}/>
+          <span style={{fontSize:13,color:C.rdl,letterSpacing:2}}>АДМИНИСТРАТОР (GM)</span>
+        </label>
+        {gm&&<div style={{background:C.pan2,border:'1px solid '+C.rdl+'44',padding:14,marginBottom:18}}>
+          <Lbl t="Пароль GM"/>
+          <input type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sub()} placeholder="••••••••" style={SI()}/>
+        </div>}
+        {err&&<div style={{color:C.rdl,fontSize:13,marginBottom:14,padding:'8px 12px',background:C.rdl+'11',border:'1px solid '+C.rdl+'33'}}>⚠ {err}</div>}
+        <button onClick={sub} style={{...SB(C.aml,C.aml,{width:'100%',padding:'14px',fontSize:15,letterSpacing:3})}}>ВОЙТИ В МАТРИЦУ ▶</button>
+      </div>
+      <div style={{fontSize:10,color:C.txdd,textAlign:'center',marginTop:10}}>Пароль GM: NETRUNNER2020 · Каждый цвет = отдельная учётная запись · Данные сохраняются навсегда</div>
+    </div>
+  </div>;
+}
+
+// ── TopBar ─────────────────────────────────────────────
+function TopBar({myP,onLogout,onInit,onGlitch,onScan}){
+  return<div style={{background:C.pan,borderBottom:'1px solid '+C.brd,height:52,display:'flex',alignItems:'center',padding:'0 18px',gap:10,flexShrink:0,position:'relative'}}>
+    <div style={{position:'absolute',top:0,left:0,right:0,height:2,background:'linear-gradient(90deg,transparent,'+C.aml+','+C.rdl+','+C.cyl+',transparent)',opacity:0.6}}/>
+    <span style={{fontFamily:C.or,fontSize:16,color:C.aml,letterSpacing:3,fontWeight:700,flexShrink:0}}>CP2020</span>
+    <span style={{fontSize:11,color:C.brdl,letterSpacing:2,flexShrink:0}}>MATRIX CALC</span>
+    <div style={{flex:1}}/>
+    {/* Scan: random bug preview, no apply */}
+    <button onClick={onScan} title="Показать случайный Баг в логе без применения"
+      style={{...SB(C.prp+'88',C.prp,{fontSize:12,padding:'6px 14px',flexShrink:0,letterSpacing:1})}}>
+      🔍 СКАНИРОВАТЬ
+    </button>
+    {/* Glitch: apply random bug immediately */}
+    <button onClick={onGlitch} title="Применить случайный Баг к персонажу (как при Крит. Провале)"
+      style={{...SB(C.rdl,C.rdl,{fontSize:12,padding:'6px 14px',flexShrink:0,letterSpacing:1})}}>
+      ⚡ ГЛЮК
+    </button>
+    <button onClick={onInit} style={{...SB(C.cyl,C.cyl,{fontSize:12,padding:'6px 16px',flexShrink:0,letterSpacing:2})}}>🎲 ИНИЦИАТИВА</button>
+    {myP&&<>
+      <div style={{width:11,height:11,borderRadius:'50%',background:myP.color,flexShrink:0,boxShadow:'0 0 9px '+myP.color}}/>
+      <span style={{fontSize:14,color:myP.color,flexShrink:0,maxWidth:140,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{myP.handle}</span>
+      {myP.isGM&&<span style={{fontSize:10,color:C.rdl,border:'1px solid '+C.rdl+'66',padding:'2px 8px',flexShrink:0}}>GM</span>}
+    </>}
+    <button onClick={onLogout} style={{...SB(C.brd,C.txd,{fontSize:11,padding:'5px 13px',flexShrink:0})}}>ВЫХОД</button>
+  </div>;
+}
+
+// ── Roster ─────────────────────────────────────────────
+function Roster({roster,myId,viewId,onSel}){
+  return<div style={{width:204,background:C.pan,borderRight:'1px solid '+C.brd,display:'flex',flexDirection:'column',flexShrink:0}}>
+    <div style={{padding:'10px 14px',fontSize:11,color:C.txd,letterSpacing:2,borderBottom:'1px solid '+C.brd,display:'flex',justifyContent:'space-between'}}>
+      <span>// НЕТРАННЕРЫ</span><span style={{color:C.aml}}>{roster.length}</span>
+    </div>
+    <div style={{flex:1,overflowY:'auto',padding:7}}>
+      {roster.map(p=><div key={p.id} onClick={()=>onSel(p.id)}
+        style={{padding:'9px 12px',marginBottom:4,cursor:'pointer',border:viewId===p.id?'1px solid '+p.color+'55':'1px solid transparent',background:viewId===p.id?'rgba(255,255,255,0.03)':'transparent',transition:'all 0.1s'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3}}>
+          <div style={{width:9,height:9,borderRadius:'50%',background:p.color,flexShrink:0,boxShadow:viewId===p.id?'0 0 7px '+p.color:'none'}}/>
+          <span style={{fontSize:14,color:p.id===myId?p.color:C.txb,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.handle}</span>
+        </div>
+        <div style={{fontSize:11,color:C.txd,paddingLeft:17,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.cyberdeck?.name||'нет кибердеки'}</div>
+        <div style={{fontSize:11,paddingLeft:17,marginTop:2}}>
+          {p.id===myId&&<span style={{color:C.brdl}}>[ВЫ] </span>}
+          {p.isGM&&<span style={{color:C.rdl}}>[GM]</span>}
+        </div>
+      </div>)}
+    </div>
+  </div>;
+}
+
+// ── Profile Sheet ──────────────────────────────────────
+function Sheet({profile,isOwn,onStat,onDeck,onAdd,onEdit,onDel,onCycle,onAtk,onBug}){
+  const [tab,setTab]=useState('deck');
+  const progs=profile.programs||[];
+  const bugs=profile.bugs||defBugs();
+  const usedMu=progs.reduce((s,p)=>{const n=+p.mu;return s+(isNaN(n)?0:n);},0);
+  const totMu=+profile.cyberdeck?.memory||0;
+  const ovf=totMu>0&&usedMu>totMu;
+  const gCrit=globalCrit(progs),gFum=globalFumble(progs,bugs);
+  const dv=calcDV(progs,bugs),spd=calcSpeed(profile.stats,progs,bugs);
+  const atkP=progs.filter(p=>p.category==='atk');
+  const defP=progs.filter(p=>p.category==='def');
+  const utlP=progs.filter(p=>p.category==='util');
+  const abCnt=BUGS.filter(b=>(bugs[b.id]||0)>0).length;
+  const tabs=[{id:'deck',lb:'КИБЕРДЕКА'},{id:'progs',lb:`ПРОГРАММЫ(${progs.length})`},{id:'bugs',lb:`БАГИ${abCnt?' ['+abCnt+']':''}`}];
+  return<div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',minWidth:0}}>
+    <div style={{background:C.pan,borderBottom:'1px solid '+C.brd,padding:'10px 18px',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
+      <div style={{width:13,height:13,borderRadius:'50%',background:profile.color,boxShadow:'0 0 12px '+profile.color}}/>
+      <span style={{fontFamily:C.or,fontSize:19,color:profile.color,letterSpacing:2}}>{profile.handle}</span>
+      {!isOwn&&<span style={{fontSize:11,color:C.txd,border:'1px solid '+C.brd,padding:'2px 10px',marginLeft:4}}>ПРОСМОТР GM</span>}
+      {profile.isGM&&<span style={{fontSize:11,color:C.rdl,border:'1px solid '+C.rdl+'55',padding:'2px 8px'}}>GM</span>}
+    </div>
+    <div style={{display:'flex',borderBottom:'1px solid '+C.brd,background:C.pan,flexShrink:0}}>
+      {tabs.map(t=><button key={t.id} onClick={()=>setTab(t.id)} style={{background:'transparent',border:'none',borderBottom:tab===t.id?'2px solid '+C.aml:'2px solid transparent',color:tab===t.id?C.aml:C.txd,fontFamily:C.fn,fontSize:12,letterSpacing:2,padding:'11px 20px',cursor:'pointer'}}>{t.lb}</button>)}
+    </div>
+    <div style={{flex:1,overflowY:'auto',padding:18}}>
+      {tab==='deck'&&<DeckTab p={profile} isOwn={isOwn} onStat={onStat} onDeck={onDeck} gCrit={gCrit} gFum={gFum} dv={dv} spd={spd} usedMu={usedMu} totMu={totMu} ovf={ovf}/>}
+      {tab==='progs'&&<ProgsTab atkP={atkP} defP={defP} utlP={utlP} isOwn={isOwn} onAdd={onAdd} onEdit={onEdit} onDel={onDel} onCycle={onCycle} onAtk={onAtk}/>}
+      {tab==='bugs'&&<BugsTab bugs={bugs} isOwn={isOwn} onBug={onBug}/>}
+    </div>
+  </div>;
+}
+
+// ── Deck Tab ───────────────────────────────────────────
+function DeckTab({p,isOwn,onStat,onDeck,gCrit,gFum,dv,spd,usedMu,totMu,ovf}){
+  return<div style={{display:'flex',flexDirection:'column',gap:16}}>
+    <Box color={C.aml} label="// ПЕРСОНАЖ">
+      <G2>
+        <SF label="Интеллект (INT)" v={p.stats?.int} onChange={v=>onStat('int',v)} dis={!isOwn} hint="0 / 1d6+4"/>
+        <SF label="Интерфейс (IFACE)" v={p.stats?.iface} onChange={v=>onStat('iface',v)} dis={!isOwn} hint="0 / 1d10"/>
+      </G2>
+      <div style={{borderTop:'1px solid '+C.brd,paddingTop:14,marginTop:8}}>
+        <Lbl t="AUTO-РАСЧЁТ (по активным программам и багам)"/>
+        <G4>
+          <AS label="Скорость деки" val={spd} c={C.cyl} sub="INT + spd − баги"/>
+          <AS label="DV персонажа" val={dv} c={C.gnl} sub="DV программ − баги"/>
+          <AS label="Порог Крита ≥" val={gCrit} c={C.aml} sub="10 + моды защ/всп"/>
+          <AS label="Порог Провала ≤" val={gFum} c={C.rdl} sub="1 + моды защ/всп + баги"/>
+        </G4>
+      </div>
+    </Box>
+    <Box color={C.aml} label="// КИБЕРДЕКА">
+      <G2>
+        <SF label="Модель" v={p.cyberdeck?.name} onChange={v=>onDeck('name',v)} dis={!isOwn} hint="Militech Delphi..."/>
+        <SF label="Память (MU)" v={p.cyberdeck?.memory} onChange={v=>onDeck('memory',v)} dis={!isOwn} hint="20"/>
+        <SF label="Скорость (raw)" v={p.cyberdeck?.speed_raw} onChange={v=>onDeck('speed_raw',v)} dis={!isOwn} hint="3"/>
+        <SF label="Защита" v={p.cyberdeck?.defense} onChange={v=>onDeck('defense',v)} dis={!isOwn} hint="0"/>
+      </G2>
+      {totMu>0&&<div style={{marginTop:10}}>
+        <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6,color:ovf?C.rdl:C.txd}}>
+          <span>ЗАГРУЗКА ПАМЯТИ</span>
+          <span style={{color:ovf?C.rdl:C.aml,fontWeight:'bold'}}>{usedMu}/{totMu} MU {ovf&&'⚠ ПЕРЕПОЛНЕНИЕ'}</span>
+        </div>
+        <div style={{height:5,background:C.brd,borderRadius:2}}>
+          <div style={{height:'100%',width:Math.min(100,usedMu/totMu*100)+'%',background:ovf?C.rdl:C.aml,transition:'width 0.4s',borderRadius:2,boxShadow:'0 0 6px '+(ovf?C.rdl:C.aml)+'88'}}/>
+        </div>
+      </div>}
+    </Box>
+  </div>;
+}
+
+// ── Progs Tab ──────────────────────────────────────────
+function ProgsTab({atkP,defP,utlP,isOwn,onAdd,onEdit,onDel,onCycle,onAtk}){
+  const total=atkP.length+defP.length+utlP.length;
+  return<div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+      <span style={{fontSize:12,color:C.txd}}>Установлено: {total}</span>
+      {isOwn&&<button onClick={onAdd} style={{...SB(C.cyl,C.cyl,{fontSize:12,padding:'7px 18px',letterSpacing:2})}}>+ УСТАНОВИТЬ</button>}
+    </div>
+    {atkP.length>0&&<><SH c={C.rdl} l={`▸ АТАКУЮЩИЕ (${atkP.length})`} mt={false}/>
+      {atkP.map(p=><PC key={p.id} prog={p} isOwn={isOwn} onEdit={onEdit} onDel={onDel} onCycle={onCycle} onAtk={onAtk}/>)}</>}
+    {defP.length>0&&<><SH c={C.cyl} l={`▸ ЗАЩИТНЫЕ (${defP.length})`} mt={atkP.length>0}/>
+      {defP.map(p=><PC key={p.id} prog={p} isOwn={isOwn} onEdit={onEdit} onDel={onDel} onCycle={onCycle} onAtk={null}/>)}</>}
+    {utlP.length>0&&<><SH c={C.aml} l={`▸ ВСПОМОГАТЕЛЬНЫЕ (${utlP.length})`} mt={atkP.length>0||defP.length>0}/>
+      {utlP.map(p=><PC key={p.id} prog={p} isOwn={isOwn} onEdit={onEdit} onDel={onDel} onCycle={onCycle} onAtk={null}/>)}</>}
+    {total===0&&<div style={{fontSize:14,color:C.txd,padding:'24px 0'}}>// Кибердека пуста</div>}
+  </div>;
+}
+function SH({c,l,mt}){return<div style={{fontSize:12,color:c,letterSpacing:3,marginBottom:9,marginTop:mt?16:2}}>{l}</div>;}
+
+// ── Program Card ───────────────────────────────────────
+function PC({prog,isOwn,onEdit,onDel,onCycle,onAtk}){
+  const cc=CATC[prog.category];
+  const st=prog.status||'active';
+  const sc=SCOL[st],isAct=st==='active',isAtk=prog.category==='atk';
+  const hasAtk=isAtk&&(prog.speed||prog.dmg_runners||prog.dmg_programs);
+  const hasMods=(prog.category==='def'||prog.category==='util')&&(prog.dv||prog.spd_bonus||prog.hit_bonus||prog.dmg_bonus_runners||prog.dmg_bonus_programs);
+  const hasCM=prog.crit_mod||prog.fumble_mod;
+  return<div style={{background:C.pan2,border:'1px solid '+(isAct?cc+'55':C.brd),marginBottom:8,opacity:isAct?1:0.48,transition:'all 0.15s'}}>
+    <div style={{display:'flex'}}>
+      <div style={{width:4,background:isAct?cc:sc,flexShrink:0}}/>
+      <div style={{flex:1,padding:'10px 13px'}}>
+        <div style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:6,flexWrap:'wrap'}}>
+          <span style={{fontSize:15,color:isAct?C.txb:C.txd,fontWeight:'bold',flex:1}}>{prog.name||'Без названия'}</span>
+          <span style={{fontSize:10,color:cc,border:'1px solid '+cc+'44',padding:'2px 8px',flexShrink:0}}>{CATL[prog.category]}</span>
+          {prog.mu&&<span style={{fontSize:12,color:C.txd}}>MU:{prog.mu}</span>}
+          {prog.price&&<span style={{fontSize:12,color:C.txd}}>eb:{prog.price}</span>}
+        </div>
+        {hasAtk&&<Row>{prog.speed&&<KV l="СКР" v={prog.speed} c={C.cyl}/>}{prog.dmg_runners&&<KV l="УРН.РАН" v={prog.dmg_runners} c={C.rdl}/>}{prog.dmg_programs&&<KV l="УРН.ПРГ" v={prog.dmg_programs} c={C.org}/>}</Row>}
+        {hasMods&&<Row>{prog.dv&&<KV l="DV" v={prog.dv} c={C.gnl}/>}{prog.spd_bonus&&<KV l="СКР+" v={prog.spd_bonus} c={C.cyl}/>}{prog.hit_bonus&&<KV l="ПОП+" v={prog.hit_bonus} c={C.aml}/>}{prog.dmg_bonus_runners&&<KV l="УРН.РАН+" v={prog.dmg_bonus_runners} c={C.rdl}/>}{prog.dmg_bonus_programs&&<KV l="УРН.ПРГ+" v={prog.dmg_bonus_programs} c={C.org}/>}</Row>}
+        {hasCM&&<Row>{prog.crit_mod&&<KV l="КРИТ МОД" v={(+prog.crit_mod>0?'+':'')+prog.crit_mod} c={C.aml}/>}{prog.fumble_mod&&<KV l="ПРОВАЛ МОД" v={(+prog.fumble_mod>0?'+':'')+prog.fumble_mod} c={C.rdl}/>}</Row>}
+        {prog.description&&<div style={{fontSize:12,color:C.txd,borderTop:'1px solid '+C.brd+'88',paddingTop:6,marginTop:6,lineHeight:1.7}}>{prog.description}</div>}
+        {isOwn?<div style={{display:'flex',gap:7,marginTop:10,flexWrap:'wrap',alignItems:'center'}}>
+          {isAtk&&onAtk&&isAct&&<button onClick={()=>onAtk(prog)} style={{...SB(cc,cc,{fontSize:12,padding:'5px 16px',letterSpacing:2})}}>⚔ АТАКА</button>}
+          <button onClick={()=>onCycle(prog.id)} style={{...SB(sc,sc,{fontSize:11,padding:'5px 14px'})}}>{SLBL[st]}</button>
+          <button onClick={()=>onEdit(prog)} style={SB(C.brdl,C.tx,{fontSize:12,padding:'5px 11px'})}>✎</button>
+          <button onClick={()=>onDel(prog.id,prog.name)} style={SB(C.rdl+'55',C.rdl,{fontSize:12,padding:'5px 11px'})}>✕</button>
+        </div>:<div style={{marginTop:6,fontSize:12,color:sc}}>{SLBL[st]}</div>}
+      </div>
+    </div>
+  </div>;
+}
+function Row({children}){return<div style={{display:'flex',gap:16,marginBottom:6,flexWrap:'wrap'}}>{children}</div>;}
+function KV({l,v,c}){return<div style={{display:'flex',alignItems:'baseline',gap:5}}><span style={{fontSize:10,color:C.txd,letterSpacing:1}}>{l}:</span><span style={{fontSize:13,color:c||C.txb,fontFamily:C.fn}}>{v}</span></div>;}
+
+// ── Bugs Tab ───────────────────────────────────────────
+function BugsTab({bugs,isOwn,onBug}){
+  return<div>
+    <div style={{fontSize:11,color:C.rdl,letterSpacing:3,marginBottom:16}}>// СИСТЕМНЫЕ БАГИ</div>
+    {BUGS.map(bug=>{
+      const cnt=bugs[bug.id]||0,act=cnt>0;
+      return<div key={bug.id} style={{background:act?'rgba(238,68,85,0.1)':C.pan2,border:'1px solid '+(act?C.rdl+'66':C.brd),padding:'11px 16px',marginBottom:8,display:'flex',alignItems:'center',gap:16,transition:'all 0.2s'}}>
+        <div style={{fontSize:13,color:act?C.rdl:C.txdd,minWidth:26,fontWeight:'bold',flexShrink:0}}>#{bug.id}</div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:15,color:act?C.rdll:C.tx,fontWeight:act?'bold':'normal',marginBottom:3}}>{bug.label}</div>
+          <div style={{fontSize:12,color:act?C.rdl+'aa':C.txd}}>{bug.desc}</div>
+          {bug.numeric&&act&&cnt>0&&<div style={{fontSize:11,color:C.rdl,marginTop:3}}>Итоговый штраф: {bug.mult*cnt>0?'+':''}{bug.mult*cnt}</div>}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:9,flexShrink:0}}>
+          <span style={{fontSize:11,color:C.txd,letterSpacing:1}}>СТАКИ:</span>
+          {isOwn?<div style={{display:'flex',alignItems:'center',gap:7}}>
+            <button onClick={()=>onBug(bug.id,cnt-1)} style={{...SB(C.brd,C.tx,{padding:'3px 11px',fontSize:16,lineHeight:1})}}>−</button>
+            <span style={{fontFamily:C.or,fontSize:21,color:act?C.rdl:C.txd,minWidth:30,textAlign:'center'}}>{cnt||'—'}</span>
+            <button onClick={()=>onBug(bug.id,cnt+1)} style={{...SB(act?C.rdl:C.brd,act?C.rdl:C.tx,{padding:'3px 11px',fontSize:16,lineHeight:1})}}>+</button>
+          </div>:<span style={{fontFamily:C.or,fontSize:21,color:act?C.rdl:C.txd,minWidth:30,textAlign:'center'}}>{cnt||'—'}</span>}
+        </div>
+      </div>;
+    })}
+  </div>;
+}
+
+// ── Shared layout components ───────────────────────────
+function Box({color,label,children}){return<div style={{background:C.pan,border:'1px solid '+C.brd}}><div style={{padding:'9px 16px',borderBottom:'1px solid '+C.brd,background:C.pan2}}><span style={{fontSize:11,color:color||C.aml,letterSpacing:3}}>{label}</span></div><div style={{padding:'14px 16px'}}>{children}</div></div>;}
+function G2({children}){return<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(170px,1fr))',gap:'0 22px'}}>{children}</div>;}
+function G4({children}){return<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(148px,1fr))',gap:'4px 18px'}}>{children}</div>;}
+function AS({label,val,c,sub}){return<div style={{marginBottom:12}}><div style={{fontSize:10,color:C.txd,letterSpacing:2,marginBottom:5,textTransform:'uppercase'}}>{label}</div><div style={{fontSize:25,color:c||C.txb,fontFamily:C.fn}}>{val}</div>{sub&&<div style={{fontSize:10,color:C.txd,marginTop:2}}>{sub}</div>}</div>;}
+function SF({label,v,onChange,dis,hint}){
+  const [ed,setEd]=useState(false);
+  const [val,setVal]=useState(v||'');
+  useEffect(()=>setVal(v||''),[v]);
+  const commit=()=>{onChange&&onChange(val);setEd(false);};
+  return<div style={{marginBottom:12}}><div style={{fontSize:10,color:C.txd,letterSpacing:2,marginBottom:7,textTransform:'uppercase'}}>{label}</div>
+    {!dis&&ed?<input autoFocus value={val} onChange={e=>setVal(e.target.value)} onBlur={commit}
+        onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape'){setVal(v||'');setEd(false);}}}
+        placeholder={hint||'0 / 1d6+2'} style={SI({fontSize:15})}/>
+      :<div onClick={()=>!dis&&setEd(true)} style={{cursor:dis?'default':'pointer',display:'flex',alignItems:'center',gap:9}}>
+          <span style={{fontSize:15,color:val?C.txb:C.txdd,borderBottom:dis?'none':'1px dotted '+C.brdl,padding:'2px 2px'}}>{val||<span style={{fontSize:12,color:C.txdd}}>—</span>}</span>
+          {!dis&&<span style={{fontSize:10,color:C.brdl}}>✎</span>}
+        </div>}
+  </div>;
+}
+
+// ── Program Modal ──────────────────────────────────────
+function ProgModal({ini,onSave,onClose}){
+  const def={name:'',category:'atk',status:'active',price:'',mu:'',speed:'',dmg_runners:'',dmg_programs:'',crit_mod:'',fumble_mod:'',description:'',dv:'',has_spd:false,has_hit:false,has_dr:false,has_dp:false,spd_bonus:'',hit_bonus:'',dmg_bonus_runners:'',dmg_bonus_programs:''};
+  const [p,setP]=useState(()=>ini?{...def,...ini,has_spd:!!ini.spd_bonus,has_hit:!!ini.hit_bonus,has_dr:!!ini.dmg_bonus_runners,has_dp:!!ini.dmg_bonus_programs}:{...def});
+  const s=(k,v)=>setP(x=>({...x,[k]:v}));
+  const cc=CATC[p.category];
+  const isMod=p.category==='def'||p.category==='util';
+  const hp='число или dice: 1d6, 1d10+3';
+  const save=()=>{
+    if(!p.name.trim())return;
+    const o={...p};
+    if(o.category!=='atk'){o.speed='';o.dmg_runners='';o.dmg_programs='';}
+    if(!o.has_spd)o.spd_bonus='';if(!o.has_hit)o.hit_bonus='';if(!o.has_dr)o.dmg_bonus_runners='';if(!o.has_dp)o.dmg_bonus_programs='';
+    delete o.has_spd;delete o.has_hit;delete o.has_dr;delete o.has_dp;
+    onSave(o);
+  };
+  return<div style={{background:C.pan,border:'1px solid '+cc+'66',width:590,maxWidth:'97%',maxHeight:'92vh',overflowY:'auto',display:'flex',flexDirection:'column'}}>
+    <div style={{padding:'13px 20px',borderBottom:'1px solid '+C.brd,display:'flex',alignItems:'center',justifyContent:'space-between',background:C.pan2,flexShrink:0}}>
+      <span style={{fontFamily:C.or,fontSize:12,color:cc,letterSpacing:2}}>{!ini?.id?'// УСТАНОВИТЬ ПРОГРАММУ':'// РЕДАКТИРОВАТЬ ПРОГРАММУ'}</span>
+      <button onClick={onClose} style={{background:'transparent',border:'none',color:C.txd,cursor:'pointer',fontSize:24,lineHeight:1}}>✕</button>
+    </div>
+    <div style={{padding:22,display:'flex',flexDirection:'column',gap:16}}>
+      <FL label="Название программы"><input value={p.name} onChange={e=>s('name',e.target.value)} placeholder="Flatline v3.0..." style={SI({fontSize:16})}/></FL>
+      <FL label="Категория"><div style={{display:'flex',gap:10}}>
+        {Object.entries(CATL).map(([k,v])=><button key={k} onClick={()=>s('category',k)} style={{...SB(p.category===k?CATC[k]:C.brd,p.category===k?CATC[k]:C.txd,{flex:1,padding:'9px 4px',fontSize:12,letterSpacing:1})}}>{v}</button>)}
+      </div></FL>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+        <FL label="Цена (eb)"><input value={p.price} onChange={e=>s('price',e.target.value)} placeholder={hp} style={SI()}/></FL>
+        <FL label="Память (MU)"><input value={p.mu} onChange={e=>s('mu',e.target.value)} placeholder="2" style={SI()}/></FL>
+      </div>
+      {/* Crit/Fumble mods - all program types */}
+      <div style={{background:C.pan2,border:'1px solid '+C.brdl,padding:14}}>
+        <div style={{fontSize:11,color:C.aml,letterSpacing:2,marginBottom:6}}>МОДИФИКАТОРЫ КРИТИЧЕСКИХ ПОРОГОВ</div>
+        <div style={{fontSize:11,color:C.txd,marginBottom:12}}>{p.category==='atk'?'⚠ Только для этой программы. Не влияет на глобальный порог деки.':'Влияют на глобальный порог деки (все атакующие программы).'}</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          <FL label="Порог Крита (мод)"><input value={p.crit_mod} onChange={e=>s('crit_mod',e.target.value)} placeholder="+1 / -2" style={SI()}/></FL>
+          <FL label="Порог Провала (мод)"><input value={p.fumble_mod} onChange={e=>s('fumble_mod',e.target.value)} placeholder="+1 / -1" style={SI()}/></FL>
+        </div>
+      </div>
+      {p.category==='atk'&&<div style={{background:C.pan2,border:'1px solid '+C.rdl+'33',padding:14}}>
+        <div style={{fontSize:11,color:C.rdl,letterSpacing:2,marginBottom:14}}>ХАРАКТЕРИСТИКИ АТАКУЮЩЕЙ ПРОГРАММЫ</div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+          <FL label="Скорость (SPD)"><input value={p.speed} onChange={e=>s('speed',e.target.value)} placeholder={hp} style={SI()}/></FL>
+          <div/>
+          <FL label="Урон ранерам"><input value={p.dmg_runners} onChange={e=>s('dmg_runners',e.target.value)} placeholder={hp} style={SI()}/></FL>
+          <FL label="Урон программам"><input value={p.dmg_programs} onChange={e=>s('dmg_programs',e.target.value)} placeholder={hp} style={SI()}/></FL>
+        </div>
+      </div>}
+      {isMod&&<div style={{background:C.pan2,border:'1px solid '+cc+'33',padding:14}}>
+        <div style={{fontSize:11,color:cc,letterSpacing:2,marginBottom:14}}>ХАРАКТЕРИСТИКИ И МОДИФИКАТОРЫ</div>
+        <div style={{marginBottom:14}}><FL label="DV (добавляется к DV персонажа)"><input value={p.dv} onChange={e=>s('dv',e.target.value)} placeholder="число" style={SI()}/></FL></div>
+        {[[p.has_spd,'has_spd','spd_bonus','БОНУС К СКОРОСТИ',C.cyl],
+          [p.has_hit,'has_hit','hit_bonus','БОНУС К ПОПАДАНИЮ (атака, не инициатива)',C.aml],
+          [p.has_dr,'has_dr','dmg_bonus_runners','БОНУС К УРОНУ ПО РАНЕРАМ',C.rdl],
+          [p.has_dp,'has_dp','dmg_bonus_programs','БОНУС К УРОНУ ПО ПРОГРАММАМ',C.org],
+        ].map(([chk,ck,vk,lb,col])=><div key={ck} style={{marginBottom:10}}>
+          <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',userSelect:'none',marginBottom:chk?8:0}}>
+            <input type="checkbox" checked={chk} onChange={e=>s(ck,e.target.checked)}/>
+            <span style={{fontSize:13,color:col,letterSpacing:1}}>{lb}</span>
+          </label>
+          {chk&&<input value={p[vk]} onChange={e=>s(vk,e.target.value)} placeholder={hp} style={SI()}/>}
+        </div>)}
+      </div>}
+      <FL label="Описание / заметки"><textarea value={p.description} onChange={e=>s('description',e.target.value)} rows={3} placeholder="Эффекты, флейвор..." style={{...SI(),resize:'vertical',minHeight:64,lineHeight:1.6}}/></FL>
+    </div>
+    <div style={{padding:'14px 22px',borderTop:'1px solid '+C.brd,display:'flex',gap:10,justifyContent:'flex-end',background:C.pan2,flexShrink:0}}>
+      <button onClick={onClose} style={SB(C.brd,C.txd)}>ОТМЕНА</button>
+      <button onClick={save} style={{...SB(cc,cc,{opacity:p.name.trim()?1:0.4})}}>{!ini?.id?'▶ УСТАНОВИТЬ':'✓ СОХРАНИТЬ'}</button>
+    </div>
+  </div>;
+}
+
+// ── Attack Modal ───────────────────────────────────────
+function AtkModal({prog,myP,onRoll,onClose}){
+  const [bon,setBon]=useState('');const [res,setRes]=useState(null);const [rol,setRol]=useState(false);
+  const progs=myP?.programs||[];const bugs=myP?.bugs||defBugs();
+  const critT=atkCrit(prog,progs),fumT=atkFumble(prog,progs,bugs);
+  const hitM=duAct(progs).filter(p=>p.hit_bonus);
+  const bh=bugHitPen(bugs),bd=bugDmgPen(bugs);
+  const go=async()=>{setRol(true);await new Promise(r=>setTimeout(r,80));const r=await onRoll(prog,bon);setRes(r);setRol(false);};
+  let pd=null;if(res?.hitTotal!==undefined)pd=res;
+  return<div style={{background:C.pan,border:'1px solid '+C.rdl+'66',width:570,maxWidth:'97%',maxHeight:'92vh',overflowY:'auto',display:'flex',flexDirection:'column'}}>
+    <div style={{padding:'12px 20px',borderBottom:'1px solid '+C.brd,background:C.pan2,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+      <span style={{fontFamily:C.or,fontSize:12,color:C.rdl,letterSpacing:2}}>// АТАКА</span>
+      <button onClick={onClose} style={{background:'transparent',border:'none',color:C.txd,cursor:'pointer',fontSize:24,lineHeight:1}}>✕</button>
+    </div>
+    <div style={{padding:20}}>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:19,color:C.txb,fontWeight:'bold',marginBottom:5}}>{prog.name}</div>
+        <div style={{display:'flex',gap:14,flexWrap:'wrap'}}>
+          {prog.speed&&<KV l="СКР" v={prog.speed} c={C.cyl}/>}
+          {prog.dmg_runners&&<KV l="УРН.РАНЕР" v={prog.dmg_runners} c={C.rdl}/>}
+          {prog.dmg_programs&&<KV l="УРН.ПРОГ" v={prog.dmg_programs} c={C.org}/>}
+          {prog.crit_mod&&<KV l="КРИТ МОД" v={(+prog.crit_mod>0?'+':'')+prog.crit_mod} c={C.aml}/>}
+          {prog.fumble_mod&&<KV l="ПРОВАЛ МОД" v={(+prog.fumble_mod>0?'+':'')+prog.fumble_mod} c={C.rdl}/>}
+        </div>
+      </div>
+      <div style={{background:C.pan2,border:'1px solid '+C.brd,padding:'11px 15px',marginBottom:16,fontSize:12,lineHeight:1.8}}>
+        <div style={{color:C.txb}}>1d10 + IFACE + бонусы к попаданию − баги + ручной</div>
+        <div style={{color:C.aml}}>Крит: d10 ≥ {critT}{prog.crit_mod?` (общий ${globalCrit(progs)} + мод ${prog.crit_mod})`:''}  |  Провал: d10 ≤ {fumT}</div>
+        {hitM.length>0&&<div style={{color:C.aml,fontSize:11}}>+ к попаданию: {hitM.map(m=>m.name+'('+m.hit_bonus+')').join(', ')}</div>}
+        {bh>0&&<div style={{color:C.rdl,fontSize:11}}>− к попаданию Bug#2: {bh}</div>}
+        {bd>0&&<div style={{color:C.rdl,fontSize:11}}>− к урону Bug#3: {bd} (мин. 1)</div>}
+      </div>
+      <FL label="Ручной бонус / штраф к попаданию">
+        <input value={bon} onChange={e=>setBon(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()} placeholder="0 / +3 / -2" style={{...SI(),marginBottom:16}}/>
+      </FL>
+      {pd&&<div style={{background:pd.isCrit?'rgba(240,176,48,0.13)':pd.isFum?'rgba(238,68,85,0.13)':C.pan3,border:'2px solid '+(pd.isCrit?C.aml:pd.isFum?C.rdl:C.brdl),marginBottom:16}}>
+        <div style={{padding:'14px 18px',borderBottom:'1px solid '+C.brd}}>
+          <div style={{fontSize:11,color:C.txd,letterSpacing:3,marginBottom:6}}>БРОСОК ПОПАДАНИЯ</div>
+          <div style={{display:'flex',alignItems:'baseline',gap:16,flexWrap:'wrap',marginBottom:8}}>
+            <span style={{fontFamily:C.or,fontSize:54,color:pd.isCrit?C.amll:pd.isFum?C.rdll:C.cyll,textShadow:'0 0 26px '+(pd.isCrit?C.aml:pd.isFum?C.rdl:C.cyl)+'88',lineHeight:1}}>{pd.hitTotal}</span>
+            <div>
+              {pd.isCrit&&<div style={{fontSize:16,color:C.amll,letterSpacing:2,fontWeight:'bold'}}>🔴 КРИТИЧЕСКИЙ УСПЕХ!</div>}
+              {pd.isFum&&<div style={{fontSize:16,color:C.rdll,letterSpacing:2,fontWeight:'bold'}}>⚫ КРИТИЧЕСКИЙ ПРОВАЛ!</div>}
+              <div style={{fontSize:12,color:C.txd,marginTop:3}}>куб: {pd.d10} · крит ≥ {pd.critT} · провал ≤ {pd.fumT}</div>
+            </div>
+          </div>
+          {pd.hitExpr&&<div style={{fontSize:11,color:C.txd}}>{pd.hitExpr}</div>}
+        </div>
+        {(pd.dmgR||pd.dmgP)&&<div style={{padding:'12px 18px',display:'flex',gap:24,flexWrap:'wrap'}}>
+          {pd.dmgR&&<div>
+            <div style={{fontSize:11,color:C.rdl,letterSpacing:2,marginBottom:5}}>УРОН ПО РАНЕРАМ</div>
+            <div style={{fontFamily:C.or,fontSize:40,color:C.rdll,textShadow:'0 0 18px '+C.rdl+'66'}}>{pd.dmgR.total}</div>
+            <div style={{fontSize:11,color:C.txd,marginTop:4}}>{pd.dmgR.parts.join(' ')}</div>
+          </div>}
+          {pd.dmgR&&pd.dmgP&&<div style={{width:1,background:C.brd}}/>}
+          {pd.dmgP&&<div>
+            <div style={{fontSize:11,color:C.org,letterSpacing:2,marginBottom:5}}>УРОН ПО ПРОГРАММАМ</div>
+            <div style={{fontFamily:C.or,fontSize:40,color:C.org,textShadow:'0 0 18px '+C.org+'66'}}>{pd.dmgP.total}</div>
+            <div style={{fontSize:11,color:C.txd,marginTop:4}}>{pd.dmgP.parts.join(' ')}</div>
+          </div>}
+        </div>}
+        {pd.isFum&&<div style={{padding:'9px 18px',borderTop:'1px solid '+C.brd,fontSize:13,color:C.rdl,background:C.rdl+'0c'}}>⚠ Критический провал — добавлен случайный Баг!</div>}
+      </div>}
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+        <button onClick={onClose} style={SB(C.brd,C.txd)}>ЗАКРЫТЬ</button>
+        <button onClick={go} disabled={rol} style={{...SB(C.rdl,C.rdl,{fontSize:14,padding:'9px 26px',letterSpacing:2,opacity:rol?0.5:1})}}>{rol?'БРОСОК...':'⚔ БРОСИТЬ'}</button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── Init Modal ─────────────────────────────────────────
+function InitModal({myP,onRoll,onClose}){
+  const [bon,setBon]=useState('');const [res,setRes]=useState(null);const [rol,setRol]=useState(false);
+  const progs=myP?.programs||[];const bugs=myP?.bugs||defBugs();
+  const spdM=duAct(progs).filter(p=>p.spd_bonus);const bs=(bugs[1]||0)*3;
+  const go=async()=>{setRol(true);await new Promise(r=>setTimeout(r,80));const r=await onRoll(bon);setRes(r);setRol(false);};
+  return<div style={{background:C.pan,border:'1px solid '+C.cyl+'66',width:510,maxWidth:'97%',display:'flex',flexDirection:'column'}}>
+    <div style={{padding:'12px 20px',borderBottom:'1px solid '+C.brd,background:C.pan2,display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <span style={{fontFamily:C.or,fontSize:12,color:C.cyl,letterSpacing:2}}>// ИНИЦИАТИВА</span>
+      <button onClick={onClose} style={{background:'transparent',border:'none',color:C.txd,cursor:'pointer',fontSize:24,lineHeight:1}}>✕</button>
+    </div>
+    <div style={{padding:20}}>
+      <div style={{background:C.pan2,border:'1px solid '+C.brd,padding:'11px 15px',marginBottom:16,fontSize:12,lineHeight:1.8}}>
+        <div style={{color:C.txb}}>1d10 + Интеллект + бонусы к скорости − баги + ручной</div>
+        <div style={{fontSize:11,color:C.txd}}>⚠ Бонус к попаданию в инициативу НЕ входит</div>
+        {spdM.length>0&&<div style={{color:C.cyl,fontSize:11}}>+ скорость: {spdM.map(m=>m.name+'('+m.spd_bonus+')').join(', ')}</div>}
+        {bs>0&&<div style={{color:C.rdl,fontSize:11}}>− Bug#1: {bs}</div>}
+      </div>
+      <FL label="Ручной бонус / штраф">
+        <input value={bon} onChange={e=>setBon(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go()} placeholder="0 / +2 / -1" style={{...SI(),marginBottom:16}}/>
+      </FL>
+      {res&&<div style={{background:C.pan3,border:'1px solid '+C.cyl,padding:'16px 20px',marginBottom:16,textAlign:'center'}}>
+        <div style={{fontFamily:C.or,fontSize:58,color:C.cyll,marginBottom:8,textShadow:'0 0 30px '+C.cyl+'66'}}>{res.total}</div>
+        <div style={{fontSize:12,color:C.txd,lineHeight:1.7}}>{res.expr}</div>
+      </div>}
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+        <button onClick={onClose} style={SB(C.brd,C.txd)}>ЗАКРЫТЬ</button>
+        <button onClick={go} disabled={rol} style={{...SB(C.cyl,C.cyl,{fontSize:14,padding:'9px 26px',letterSpacing:2,opacity:rol?0.5:1})}}>{rol?'БРОСОК...':'🎲 БРОСИТЬ'}</button>
+      </div>
+    </div>
+  </div>;
+}
+
+// ── Log Panel ──────────────────────────────────────────
+const LTCOL={info:C.txb,roll:C.aml,crit:C.amll,fumble:C.rdl,system:C.cyl};
+
+function renderDetail(entry){
+  if(!entry.detail)return null;
+  let p=null;try{p=JSON.parse(entry.detail);}catch{}
+  if(p&&p.hitTotal!==undefined){
+    const isCrit=p.isCrit,isFum=p.isFum;
+    return<div style={{marginTop:7,marginLeft:8,paddingLeft:12,borderLeft:'2px solid '+entry.color+'44'}}>
+      <div style={{display:'flex',alignItems:'flex-end',gap:20,flexWrap:'wrap',marginBottom:8}}>
+        {/* Hit — large */}
+        <div>
+          <div style={{fontSize:10,color:C.txd,letterSpacing:2,marginBottom:4}}>ПОПАДАНИЕ</div>
+          <span style={{fontFamily:C.or,fontSize:46,color:isCrit?C.amll:isFum?C.rdll:C.cyll,textShadow:'0 0 20px '+(isCrit?C.aml:isFum?C.rdl:C.cyl)+'77',lineHeight:1}}>{p.hitTotal}</span>
+          {isCrit&&<span style={{fontSize:14,color:C.amll,marginLeft:12,fontWeight:'bold'}}>🔴 КРИТ!</span>}
+          {isFum&&<span style={{fontSize:14,color:C.rdll,marginLeft:12,fontWeight:'bold'}}>⚫ ПРОВАЛ!</span>}
+        </div>
+        {/* Dmg — large colored */}
+        {p.dmgR&&<div>
+          <div style={{fontSize:10,color:C.rdl,letterSpacing:2,marginBottom:4}}>УРОН / РАНЕР</div>
+          <span style={{fontFamily:C.or,fontSize:46,color:C.rdll,textShadow:'0 0 18px '+C.rdl+'66',lineHeight:1}}>{p.dmgR.total}</span>
+        </div>}
+        {p.dmgP&&<div>
+          <div style={{fontSize:10,color:C.org,letterSpacing:2,marginBottom:4}}>УРОН / ПРОГ</div>
+          <span style={{fontFamily:C.or,fontSize:46,color:C.org,textShadow:'0 0 18px '+C.org+'66',lineHeight:1}}>{p.dmgP.total}</span>
+        </div>}
+      </div>
+      <div style={{fontSize:11,color:C.txd,lineHeight:1.7}}>{p.hitExpr}</div>
+      {p.dmgR?.parts&&<div style={{fontSize:11,color:C.txd}}>Урон/ран: {p.dmgR.parts.join(' ')}</div>}
+      {p.dmgP?.parts&&<div style={{fontSize:11,color:C.txd}}>Урон/прг: {p.dmgP.parts.join(' ')}</div>}
+      {p.description&&<div style={{fontSize:11,color:C.txd,marginTop:4,fontStyle:'italic'}}>{p.description}</div>}
+    </div>;
+  }
+  if(p&&p.total!==undefined&&p.expr){
+    return<div style={{marginTop:7,marginLeft:8,paddingLeft:12,borderLeft:'2px solid '+entry.color+'44',display:'flex',alignItems:'flex-end',gap:18,flexWrap:'wrap'}}>
+      <div>
+        <div style={{fontSize:10,color:C.txd,letterSpacing:2,marginBottom:4}}>ИНИЦИАТИВА</div>
+        <span style={{fontFamily:C.or,fontSize:46,color:C.cyll,textShadow:'0 0 20px '+C.cyl+'66',lineHeight:1}}>{p.total}</span>
+      </div>
+      <div style={{fontSize:12,color:C.txd,flex:1,lineHeight:1.7,alignSelf:'center'}}>{p.expr}</div>
+    </div>;
+  }
+  return<div style={{marginTop:5,marginLeft:8,paddingLeft:12,borderLeft:'2px solid '+entry.color+'33',fontSize:12,color:C.txd,lineHeight:1.7}}>{entry.detail}</div>;
+}
+
+function LogPanel({logs,logRef}){
+  const [open,setOpen]=useState(true);
+  // Track whether user is scrolled to (near) the bottom
+  const atBottomRef=useRef(true);
+
+  // Only auto-scroll when user is already at bottom
+  useEffect(()=>{
+    const el=logRef.current;
+    if(!el||!open)return;
+    if(atBottomRef.current) el.scrollTop=el.scrollHeight;
+  },[logs,open]);
+
+  const onScroll=e=>{
+    const el=e.currentTarget;
+    // Consider "at bottom" if within 60px of the bottom
+    atBottomRef.current=(el.scrollHeight-el.scrollTop-el.clientHeight)<60;
+  };
+
+  return<div style={{background:C.pan,borderTop:'1px solid '+C.brd,height:open?270:44,transition:'height 0.2s',display:'flex',flexDirection:'column',flexShrink:0}}>
+    <div onClick={()=>setOpen(o=>!o)} style={{padding:'10px 18px',borderBottom:open?'1px solid '+C.brd:'none',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',flexShrink:0}}>
+      <div style={{display:'flex',alignItems:'center',gap:14}}>
+        <span style={{fontSize:11,color:C.aml,letterSpacing:3}}>// ЖУРНАЛ МАТРИЦЫ</span>
+        <span style={{fontSize:12,color:C.txd}}>{logs.length}/{MAX_LOG} записей</span>
+      </div>
+      <span style={{fontSize:14,color:C.brdl}}>{open?'▼':'▲'}</span>
+    </div>
+    {open&&<div ref={logRef} onScroll={onScroll} style={{flex:1,overflowY:'auto',padding:'8px 16px'}}>
+      {logs.length===0&&<div style={{fontSize:13,color:C.txd,padding:'10px 0'}}>// ожидание активности...</div>}
+      {logs.map(e=><div key={e.id} style={{marginBottom:12,padding:'8px 13px',borderLeft:'3px solid '+(e.type==='fumble'?C.rdl:e.type==='crit'?C.aml:e.type==='system'?C.cyl:e.color+'88'),background:'rgba(255,255,255,0.016)'}}>
+        <div style={{display:'flex',alignItems:'baseline',gap:10,flexWrap:'wrap'}}>
+          <span style={{color:C.txdd,fontSize:11,flexShrink:0}}>[{e.t}]</span>
+          <span style={{color:e.color,fontWeight:'bold',fontSize:15,flexShrink:0}}>{e.from}</span>
+          <span style={{color:LTCOL[e.type]||C.txb,fontSize:14}}>{e.action}</span>
+        </div>
+        {renderDetail(e)}
+      </div>)}
+    </div>}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
